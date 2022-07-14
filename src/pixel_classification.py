@@ -39,18 +39,35 @@ class pixel_classifier:
         self.image_shape = image_shape
         self.debug = debug
         if self.avg_off_gain_pixels:
-            self.data = self.fill_off_gain_pixels() 
+            self.smoothed_data = self.fill_off_gain_pixels() 
         self.transformed_data = self.transform_data()
-        if self.rescale_data:
+        if self.avg_off_gain_pixels:
+            self.X = self.remove_off_pixel_data() 
+        else:
             X = self.transformed_data.flatten()
-            X = X/np.std(X)
+            if self.rescale_data:
+                X = X/np.std(X)
             self.X = X.reshape(-1,1)
-        else:    
-            self.X = self.transformed_data.flatten().reshape(-1,1)
+
         self.gmm_models = self.fit_gaussian_mixture_models()
         self.best_model_idx = self.determine_best_mixture_model()
         self.best_gmm_model = self.gmm_models[self.best_model_idx]
         self.means, self.variances = self.get_gmm_parameters() 
+
+    def remove_off_pixel_data(self):
+        """
+        Remove elements of array that correspond to pixels 
+        in the incorrect gain mode
+        """
+        X = self.transformed_data.flatten()
+        raw_X = self.data.flatten()
+        gain_map = np.isnan(raw_X)
+        X_select_gain = np.delete(X, gain_map)
+        print(f'removed {len(gain_map[0])} off gain pixels'
+        if self.rescale_data:
+            X_select_gain = X_select_gain/np.std(X_select_gain)
+
+        return X_select_gain.reshape(-1,1)
 
     def get_local_array(self, panel_mat, slow_bounds, fast_bounds):
         """
@@ -118,23 +135,27 @@ class pixel_classifier:
 
     def transform_data(self):
         """
-        Performs bilaterial transformation on panel image data
-        """
-        if self.norm_flag:
-            data = self.data/scipy.linalg.norm(self.data, 2)
-            shifted_img = scipy.ndimage.shift(data,
-                                     self.transform_step_size,
-                                     order=0,
-                                     mode='nearest'
-                                     )
-            trans_img = data - shifted_img
+        Performs bilaterial transformation on panel image data.
+        There are two options on how to treat pixels in different gain modes:
+          1. Replace them with averages of neighoring pixels of desired gain
+          2. Assign them values of 0.0
         
-        shifted_img = scipy.ndimage.shift(self.data,
+        """
+        if self.avg_off_gain_pixels:
+            data = self.smoothed_data
+        else:
+            data = self.data
+            data = np.nan_to_num(data, nan=0.0)
+
+        if self.norm_flag:
+            data = self.data/scipy.linalg.norm(data, 2)
+        
+        shifted_img = scipy.ndimage.shift(data,
                                      self.transform_step_size,
                                      order=0,
                                      mode='nearest'
                                      )
-        trans_img = self.data - shifted_img
+        trans_img = data - shifted_img
         
         return trans_img
 
@@ -143,20 +164,19 @@ class pixel_classifier:
         Performs expectation-maximization algorithm for fitting mixture-of-Gaussian models.
         A Gaussian mixture model is a probabilistic model that assumes all the data points
         are generated from a mixture of a finite number of Gaussian distributions with unknown parameters.
-        Args:
-            X (np.array): 1D array of transformed pixel intensities
-            max_num_models (int): maximum number of Gaussian distributions in mixture model
-            rescale_data (bool): Flag to standardize data by standard deviation. (Improves robustnesses of this method)
         Returns:
             models (obj.); Gaussian Mixture model object (sklearn)
         """
+
+
         num_gaussians_list = np.arange(1,self.max_num_models+1)
 
         models = [None for i in range(len(num_gaussians_list))]
 
         for i in range(len(num_gaussians_list)):
             models[i] = GaussianMixture(num_gaussians_list[i]).fit(self.X)
-        print('model len',len(models))
+        if self.debug > 1:    
+            print('model len',len(models))
         return models
 
     def determine_best_mixture_model(self):
