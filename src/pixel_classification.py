@@ -8,7 +8,7 @@ class pixel_classifier:
     """
 
     def __init__(self, data, transform_step_size=1, norm_flag=False, max_num_models=10, rescale_data=True,
-                 IC_type="AIC", IC_threshold=50, image_shape=[32,128]):
+                 IC_type="AIC", IC_threshold=50, avg_off_gain_pixels=True, image_shape=[32,128], debug=0):
         """
         data(np.matrix): matrix of pixel intensities from 1 detector panel
         transform_step_size(int): step size of bilateral transformation
@@ -17,6 +17,7 @@ class pixel_classifier:
         rescale_data (bool): flag to standardize data by standard deviation. (Improves robustnesses of this method)
         IC_type(str): type of information criterion to be used to assess model goodness of fit
         IC_threshold(int): cut-off value used used to assess information crieterion is plateauing
+        avg_off_gain_pixels(bool): flag to replace pixels in the wrong gain mode with values averaged by nearest pixels
         image_shape (list): size of image shape slow axis dimension is given first, then fast dimension second
         transformed_data (np.array): pixel intensities of single panel after bilateral transform
         X (np.array): transformed pixel intensities reshaped for GaussianMixture object
@@ -34,7 +35,11 @@ class pixel_classifier:
         self.rescale_data = rescale_data
         self.IC_type = IC_type 
         self.IC_threshold = IC_threshold
+        self.avg_off_gain_pixels = avg_off_gain_pixels
         self.image_shape = image_shape
+        self.debug = debug
+        if self.avg_off_gain_pixels:
+            self.data = self.fill_off_gain_pixels() 
         self.transformed_data = self.transform_data()
         if self.rescale_data:
             X = self.transformed_data.flatten()
@@ -47,11 +52,74 @@ class pixel_classifier:
         self.best_gmm_model = self.gmm_models[self.best_model_idx]
         self.means, self.variances = self.get_gmm_parameters() 
 
+    def get_local_array(self, panel_mat, slow_bounds, fast_bounds):
+        """
+        Returns an array that surrounds an input pixel or bounded area
+        Args:
+            panel_mat (np.array): array of pixel intensities from panel 
+            slow_bounds (list): list of slow axis bounds [lo,hi]
+            fast bounds (list): list of fast axis bounds [lo, hi]
+        Returns:
+            local_mat (np.array): array of expanded size
+            slow_bounds (list): list of new slow axis bounds [lo,ho]
+            fast_bounds (list): list of new fast axis bounds [lo, hi]
+        """
+        if slow_bounds[0] <= 1:
+            slow_bounds[0] = 0
+        else:
+            slow_bounds[0] = slow_bounds[0] - 1
+        
+        if slow_bounds[1] >= self.image_shape[0] - 1:
+            slow_bounds[1] = self.image_shape[0] 
+        else:
+            slow_bounds[1] = slow_bounds[1]+2
+        
+        if fast_bounds[0] <= 2:
+            fast_bounds[0] = 0
+        else:
+            fast_bounds[0] = fast_bounds[0] - 2
+        
+        if fast_bounds[1] >= self.image_shape[1] - 3:
+            fast_bounds[1] = self.image_shape[1] 
+        else:
+            fast_bounds[1] = fast_bounds[1] + 3   
+
+        return panel_mat[slow_bounds[0]:slow_bounds[1]][fast_bounds[0]:fast_bounds[1]], slow_bounds, fast_bounds    
+
+    def fill_off_gain_pixels(self):
+        panel_mat = self.data
+        gain_map = np.isnan(panel_mat)
+        bad_gain_loc = np.where(gain_map==True)
+        if self.debug > 1:
+            print(f'there are {len(bad_gain_loc[0])} off gain pixels')
+        count = 0
+        for slow,fast in zip(bad_gain_loc[0],bad_gain_loc[1]):
+            slow_bounds = [slow, slow]
+            fast_bounds = [fast, fast]
+            local_mat, slow_bounds, fast_bounds = get_local_mat(panel_mat, slow_bounds, fast_bounds)
+            while (slow_bounds[1]-slow_bounds[0] < self.image_shape[0] and
+                      fast_bounds[1]-fast_bounds[0] < self.image_shape[1]): 
+                local_gain_map = np.isnan(local_mat)
+                local_bad_gain = np.where(local_gain_map==True)
+                flat_local_mat = local_mat.flatten()
+                local_size = len(flat_local_mat)
+                bad_gain_size = len(local_bad_gain[0])
+                if local_size > 4* bad_gain_size:
+                    flat_local_mat = flat_local_mat[~np.isnan(flat_local_mat)]
+                    avg_val = np.average(flat_local_mat)
+                    panel_mat[slow][fast] = avg_val
+                    if self.debug > 1:
+                        print(f'replaced {count} off gain pixel with {avg_val}')
+                    count = count + 1
+                    break
+                else:
+                    local_mat, slow_bounds, fast_bounds = get_local_mat(panel_mat, slow_bounds, fast_bounds)   
+        return panel_mat            
+
     def transform_data(self):
         """
         Performs bilaterial transformation on panel image data
         """
-
         if self.norm_flag:
             data = self.data/scipy.linalg.norm(self.data, 2)
             shifted_img = scipy.ndimage.shift(data,
@@ -60,7 +128,7 @@ class pixel_classifier:
                                      mode='nearest'
                                      )
             trans_img = data - shifted_img
-
+        
         shifted_img = scipy.ndimage.shift(self.data,
                                      self.transform_step_size,
                                      order=0,
