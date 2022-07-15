@@ -63,7 +63,7 @@ class pixel_classifier:
         raw_X = self.data.flatten()
         gain_map = np.isnan(raw_X)
         X_select_gain = np.delete(X, gain_map)
-        print(f'removed {len(gain_map[0])} off gain pixels'
+        #print(f'removed {len(gain_map[0])} off gain pixels')
         if self.rescale_data:
             X_select_gain = X_select_gain/np.std(X_select_gain)
 
@@ -113,7 +113,7 @@ class pixel_classifier:
         for slow,fast in zip(bad_gain_loc[0],bad_gain_loc[1]):
             slow_bounds = [slow, slow]
             fast_bounds = [fast, fast]
-            local_mat, slow_bounds, fast_bounds = get_local_mat(panel_mat, slow_bounds, fast_bounds)
+            local_mat, slow_bounds, fast_bounds = self.get_local_array(panel_mat, slow_bounds, fast_bounds)
             while (slow_bounds[1]-slow_bounds[0] < self.image_shape[0] and
                       fast_bounds[1]-fast_bounds[0] < self.image_shape[1]): 
                 local_gain_map = np.isnan(local_mat)
@@ -130,7 +130,7 @@ class pixel_classifier:
                     count = count + 1
                     break
                 else:
-                    local_mat, slow_bounds, fast_bounds = get_local_mat(panel_mat, slow_bounds, fast_bounds)   
+                    local_mat, slow_bounds, fast_bounds = self.get_local_array(panel_mat, slow_bounds, fast_bounds)   
         return panel_mat            
 
     def transform_data(self):
